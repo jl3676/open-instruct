@@ -17,6 +17,7 @@
 import logging
 import math
 import os
+import json
 import random
 from datetime import timedelta
 from functools import partial
@@ -227,6 +228,8 @@ def main():
         dataset_args = {}
         if args.train_file is not None:
             data_files["train"] = args.train_file
+        if args.validation_file is not None:
+            data_files["validation"] = args.validation_file
         raw_datasets = load_dataset(
             "json",
             data_files=data_files,
@@ -371,6 +374,11 @@ def main():
     with deepspeed.zero.GatheredParameters(embeddings.weight, modifier_rank=None):
         embedding_size = embeddings.weight.shape[0]
 
+    # add dummy tokens to the tokenizer to match the size of the embeddings
+    print(f"Adding {embedding_size - len(tokenizer)} dummy tokens to the tokenizer.")
+    for i in range(embedding_size - len(tokenizer)):
+        tokenizer.add_special_tokens({"dummy_token": f"<dummy_id_{i}>"})
+
     # set the tokenizer chat template to the tulu format
     # this makes evaluation/etc easier down the line.
     tokenizer.chat_template = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"  # noqa: E501
@@ -431,11 +439,13 @@ def main():
         lm_datasets = lm_datasets.filter(lambda example: (example["labels"] != -100).any())
 
     train_dataset = lm_datasets["train"]
+    validation_dataset = lm_datasets["validation"]
     # debugging tool for fewer samples
     if args.max_train_samples is not None:
         max_train_samples = min(len(train_dataset), args.max_train_samples)
         logger.info(f"Limiting training samples to {max_train_samples} from {len(train_dataset)}.")
         train_dataset = train_dataset.select(range(max_train_samples))
+        validation_dataset = validation_dataset.select(range(max_train_samples))
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 3):
@@ -444,6 +454,12 @@ def main():
     # DataLoaders creation:
     train_dataloader = DataLoader(
         train_dataset,
+        shuffle=True,
+        collate_fn=DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model, padding="longest"),
+        batch_size=args.per_device_train_batch_size,
+    )
+    validation_dataloader = DataLoader(
+        validation_dataset,
         shuffle=True,
         collate_fn=DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model, padding="longest"),
         batch_size=args.per_device_train_batch_size,
@@ -576,6 +592,37 @@ def main():
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
 
+    def eval(model, epoch):
+        model.eval()
+        with torch.no_grad():
+            total_loss = 0
+            for batch in validation_dataloader:
+                outputs = model(**batch, use_cache=False)
+                if args.reduce_loss == "mean":
+                    loss = outputs.loss
+                else:
+                    logits = outputs.logits
+                    labels = batch["labels"]
+                    # Shift so that tokens < n predict n
+                    shift_logits = logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    # Flatten the tokens
+                    loss_fct = torch.nn.CrossEntropyLoss(reduction="sum")
+                    shift_logits = shift_logits.view(-1, embedding_size)
+                    shift_labels = shift_labels.view(-1)
+                    # Enable model parallelism
+                    shift_labels = shift_labels.to(shift_logits.device)
+                    loss = loss_fct(shift_logits, shift_labels)
+                # We keep track of the loss at each logged step
+                total_loss += loss.item()
+            avg_loss = total_loss / len(validation_dataset)
+
+            logger.info(f"Epoch: {epoch}, Validation Loss: {avg_loss}")
+            with open(os.path.join(args.output_dir, "losses.jsonl"), "a") as f:
+                f.write(json.dumps(f"Epoch: {epoch}, Validation Loss: {avg_loss}") + "\n")
+
+    eval(model, 0)
+
     for epoch in range(starting_epoch, args.num_train_epochs):
         model.train()
         total_loss = 0
@@ -624,11 +671,17 @@ def main():
                 progress_bar.update(1)
                 completed_steps += 1
                 if args.logging_steps and completed_steps % args.logging_steps == 0:
-                    avg_loss = (
+                    if step == len(active_dataloader) - 1:
+                        avg_loss = (
                         accelerator.gather(total_loss).mean().item()
-                        / args.gradient_accumulation_steps
-                        / args.logging_steps
+                        / batch[0].size(0)
                     )
+                    else:
+                        avg_loss = (
+                            accelerator.gather(total_loss).mean().item()
+                            / args.gradient_accumulation_steps
+                            / args.logging_steps
+                        )
                     logger.info(f"  Step: {completed_steps}, LR: {lr_scheduler.get_last_lr()[0]}, Loss: {avg_loss}")
                     if args.with_tracking:
                         accelerator.log(
@@ -638,6 +691,8 @@ def main():
                             },
                             step=completed_steps,
                         )
+                    with open(os.path.join(args.output_dir, "losses.jsonl"), "a") as f:
+                        f.write(json.dumps(f"Epoch: {epoch}, Step: {completed_steps}, Learning Rate: {lr_scheduler.get_last_lr()[0]}, Train Loss: {avg_loss}") + "\n")
                     total_loss = 0
 
                 if isinstance(checkpointing_steps, int):
@@ -649,6 +704,8 @@ def main():
 
                 if completed_steps >= args.max_train_steps:
                     break
+
+        eval(model, epoch)
 
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"

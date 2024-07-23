@@ -114,6 +114,9 @@ class FlatArguments:
     train_file: Optional[str] = field(
         default=None, metadata={"help": "The input training data file (a json/jsonl file)."}
     )
+    validation_file: Optional[str] = field(
+        default=None, metadata={"help": "The input validation data file (a json/jsonl file)."}
+    )
     max_train_samples: Optional[int] = field(
         default=None,
         metadata={
