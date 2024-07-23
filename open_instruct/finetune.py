@@ -592,7 +592,7 @@ def main():
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
 
-    def eval(model, epoch):
+    def validation(model, epoch):
         model.eval()
         with torch.no_grad():
             total_loss = 0
@@ -621,7 +621,7 @@ def main():
             with open(os.path.join(args.output_dir, "losses.jsonl"), "a") as f:
                 f.write(json.dumps(f"Epoch: {epoch}, Validation Loss: {avg_loss}") + "\n")
 
-    eval(model, 0)
+    validation(model, 0)
 
     for epoch in range(starting_epoch, args.num_train_epochs):
         model.train()
@@ -705,7 +705,7 @@ def main():
                 if completed_steps >= args.max_train_steps:
                     break
 
-        eval(model, epoch)
+        validation(model, epoch)
 
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
