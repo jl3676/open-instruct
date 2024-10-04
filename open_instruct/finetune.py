@@ -17,6 +17,7 @@
 import logging
 import math
 import os
+import json
 import random
 from datetime import timedelta
 from functools import partial
@@ -46,7 +47,7 @@ from transformers import (
     get_scheduler,
 )
 
-from open_instruct.utils import ArgumentParserPlus, FlatArguments
+from utils import ArgumentParserPlus, FlatArguments
 
 logger = get_logger(__name__)
 
@@ -79,7 +80,7 @@ def encode_with_prompt_completion_format(example, tokenizer, max_seq_length, add
     }
 
 
-def encode_with_messages_format(example, tokenizer, max_seq_length, add_bos=False):
+def encode_with_messages_format(example, tokenizer, max_seq_length, analysis_type, add_bos=False, static_prompts_file='../src/static_prompts.json'):
     """
     Here we assume each example has a 'messages' field Each message is a dict with 'role' and 'content' fields.
     We concatenate all messages with the roles as delimiters and tokenize them together.
@@ -89,10 +90,58 @@ def encode_with_messages_format(example, tokenizer, max_seq_length, add_bos=Fals
         raise ValueError("messages field is empty.")
 
     def _concat_messages(messages):
+        with open(static_prompts_file, 'r') as file:
+            static_prompts = json.load(file)
+
+        harm_extent_minor = static_prompts['harm_extent_minor']
+        harm_extent_significant = static_prompts['harm_extent_significant']
+        harm_extent_substantial = static_prompts['harm_extent_substantial']
+        harm_extent_major = static_prompts['harm_extent_major']
+
+        benefit_extent_minor = static_prompts['benefit_extent_minor']
+        benefit_extent_significant = static_prompts['benefit_extent_significant']
+        benefit_extent_substantial = static_prompts['benefit_extent_substantial']
+        benefit_extent_major = static_prompts['benefit_extent_major']
+
+        likelihood_low = static_prompts['likelihood_low']
+        likelihood_medium = static_prompts['likelihood_medium']
+        likelihood_high = static_prompts['likelihood_high']
+        
+        finetuning_setup = static_prompts['finetuning_setup']
+        finetuning_setup_harms = static_prompts['finetuning_setup_harms']
+        finetuning_setup_benefits = static_prompts['finetuning_setup_benefits']
+        finetuning_JSON_format = static_prompts['finetuning_JSON_format']
+        finetuning_JSON_format_harms = static_prompts['finetuning_JSON_format_harms']
+        finetuning_JSON_format_benefits = static_prompts['finetuning_JSON_format_benefits']
+        AIR2024_taxonomy = static_prompts['AIR2024_taxonomy_min']
+        harmful_effects_taxonomy = static_prompts['harmful_effects_taxonomy_min']
+        beneficial_effects_taxonomy = static_prompts['beneficial_effects_taxonomy_min']
+
         message_text = ""
         for message in messages:
             if message["role"] == "system":
-                message_text += "<|system|>\n" + message["content"].strip() + "\n"
+                if 'harm' in analysis_type:
+                    message_text += "<|system|>\n" + finetuning_setup_harms + \
+                        "The JSON format is:\n" + finetuning_JSON_format_harms + \
+                        "The hierarchical taxonomy of harmful action types is defined as:\n" + AIR2024_taxonomy + \
+                        "The taxonomy of harmful effects is defined as:\n" + harmful_effects_taxonomy + \
+                        "The extents of harm are defined as:\n" + harm_extent_minor + harm_extent_significant + harm_extent_substantial + harm_extent_major + \
+                        "The likelihoods of harms are defined as:\n" + likelihood_low + likelihood_medium + likelihood_high.strip() + "\n"
+                elif 'benefit' in analysis_type:
+                    message_text += "<|system|>\n" + finetuning_setup_benefits + \
+                        "The JSON format is:\n" + finetuning_JSON_format_benefits + \
+                        "The taxonomy of beneficial effects is defined as:\n" + beneficial_effects_taxonomy + \
+                        "The extents of benefit are defined as:\n" + benefit_extent_minor + benefit_extent_significant + benefit_extent_substantial + benefit_extent_major + \
+                        "The likelihoods of benefits are defined as:\n" + likelihood_low + likelihood_medium + likelihood_high.strip() + "\n"
+                else:
+                    message_text += "<|system|>\n" + finetuning_setup + \
+                        "The JSON format is:\n" + finetuning_JSON_format + \
+                        "The hierarchical taxonomy of harmful action types is defined as:\n" + AIR2024_taxonomy + \
+                        "The taxonomy of harmful effects is defined as:\n" + harmful_effects_taxonomy + \
+                        "The taxonomy of beneficial effects is defined as:\n" + beneficial_effects_taxonomy + \
+                        "The extents of harm are defined as:\n" + harm_extent_minor + harm_extent_significant + harm_extent_substantial + harm_extent_major + \
+                        "The extents of benefit are defined as:\n" + benefit_extent_minor + benefit_extent_significant + benefit_extent_substantial + benefit_extent_major + \
+                        "The likelihoods of harms and benefits are defined as:\n" + likelihood_low + likelihood_medium + likelihood_high.strip() + "\n"
             elif message["role"] == "user":
                 message_text += "<|user|>\n" + message["content"].strip() + "\n"
             elif message["role"] == "assistant":
@@ -106,6 +155,8 @@ def encode_with_messages_format(example, tokenizer, max_seq_length, add_bos=Fals
         example_text = tokenizer.bos_token + example_text
     tokenized_example = tokenizer(example_text, return_tensors="pt", max_length=max_seq_length, truncation=True)
     input_ids = tokenized_example.input_ids
+    with open('temp.txt', 'a') as f:
+        f.write(str(input_ids.shape[-1]) + '\n')
     labels = input_ids.clone()
 
     # mask the non-assistant part for avoiding loss
@@ -374,7 +425,7 @@ def main():
     # add dummy tokens to the tokenizer to match the size of the embeddings
     print(f"Adding {embedding_size - len(tokenizer)} dummy tokens to the tokenizer.")
     for i in range(embedding_size - len(tokenizer)):
-        tokenizer.add_special_tokens({"dummy_token": f"<dummy_id_{i}>"})
+        tokenizer.add_tokens([f"dummy_id_{i}"])
 
     # set the tokenizer chat template to the tulu format
     # this makes evaluation/etc easier down the line.
@@ -415,6 +466,7 @@ def main():
             tokenizer=tokenizer,
             max_seq_length=args.max_seq_length,
             add_bos=args.add_bos,
+            analysis_type='harms' if 'benefit' not in args.train_file else ('benefit' if 'harm' not in args.train_file else 'both'),
         )
     else:
         raise ValueError("You need to have either 'prompt'&'completion' or 'messages' in your column names.")

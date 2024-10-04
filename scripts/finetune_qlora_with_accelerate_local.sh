@@ -23,8 +23,8 @@ accelerate launch \
     --lora_dropout 0.1 \
     --tokenizer_name ${MODEL_PREFIX}/${MODEL} \
     --use_slow_tokenizer \
-    --train_file /data/wildjailbreak_harm_benefit_analysis_train.jsonl \
-    --max_seq_length 16000 \
+    --train_file ../sft_data/harm_analysis_all.jsonl \
+    --max_seq_length 20000 \
     --preprocessing_num_workers 128 \
     --per_device_train_batch_size $BATCH_SIZE_PER_GPU \
     --gradient_accumulation_steps $GRADIENT_ACC_STEPS \
@@ -33,14 +33,14 @@ accelerate launch \
     --warmup_ratio 0.03 \
     --weight_decay 0. \
     --num_train_epochs 2 \
-    --output_dir /output/${MODEL}_vanilla_qlora/ \
+    --output_dir ../models/${MODEL}_vanilla_qlora/ \
     --with_tracking \
     --report_to tensorboard \
     --logging_steps 1 &&
 
 python open_instruct/merge_lora.py \
     --base_model_name_or_path ${MODEL_PREFIX}/${MODEL} \
-    --lora_model_name_or_path /output/${MODEL}_vanilla_qlora/ \
-    --output_dir /output/${MODEL}_vanilla_qlora_merged/ \
+    --lora_model_name_or_path ../models/${MODEL}_vanilla_qlora/ \
+    --output_dir ../models/${MODEL}_vanilla_qlora_merged/ \
     --qlora \
     --save_tokenizer
