@@ -80,7 +80,7 @@ def encode_with_prompt_completion_format(example, tokenizer, max_seq_length, add
     }
 
 
-def encode_with_messages_format(example, tokenizer, max_seq_length, analysis_type, add_bos=False, static_prompts_file='../src/static_prompts.json'):
+def encode_with_messages_format(example, tokenizer, max_seq_length, add_bos=False):
     """
     Here we assume each example has a 'messages' field Each message is a dict with 'role' and 'content' fields.
     We concatenate all messages with the roles as delimiters and tokenize them together.
@@ -90,210 +90,10 @@ def encode_with_messages_format(example, tokenizer, max_seq_length, analysis_typ
         raise ValueError("messages field is empty.")
 
     def _concat_messages(messages):
-        with open(static_prompts_file, 'r') as file:
-            static_prompts = json.load(file)
-
-        harm_extent_minor = static_prompts['harm_extent_minor']
-        harm_extent_significant = static_prompts['harm_extent_significant']
-        harm_extent_substantial = static_prompts['harm_extent_substantial']
-        harm_extent_major = static_prompts['harm_extent_major']
-
-        benefit_extent_minor = static_prompts['benefit_extent_minor']
-        benefit_extent_significant = static_prompts['benefit_extent_significant']
-        benefit_extent_substantial = static_prompts['benefit_extent_substantial']
-        benefit_extent_major = static_prompts['benefit_extent_major']
-
-        likelihood_low = static_prompts['likelihood_low']
-        likelihood_medium = static_prompts['likelihood_medium']
-        likelihood_high = static_prompts['likelihood_high']
-        
-        finetuning_setup = static_prompts['finetuning_setup']
-        finetuning_setup_harms = static_prompts['finetuning_setup_harms']
-        finetuning_setup_benefits = static_prompts['finetuning_setup_benefits']
-        finetuning_JSON_format = static_prompts['finetuning_JSON_format']
-        finetuning_JSON_format_harms = static_prompts['finetuning_JSON_format_harms']
-        finetuning_JSON_format_benefits = static_prompts['finetuning_JSON_format_benefits']
-        AIR2024_taxonomy = static_prompts['AIR2024_taxonomy_min']
-        harmful_effects_taxonomy = static_prompts['harmful_effects_taxonomy_min']
-        beneficial_effects_taxonomy = static_prompts['beneficial_effects_taxonomy_min']
-
         message_text = ""
         for message in messages:
             if message["role"] == "system":
-                if 'harm' in analysis_type:
-                    message_text += """<|system|>
-Given a scenario based on an interaction between an AI language model and its user, who has the capabilities of an everyday person, analyze the harms of the scenario on all stakeholders without additional explanations in plain text. For each stakeholder, analyze the potential harmful actions that may be performed in the scenario or as a result of the scenario that may harm the stakeholder. For each action, analyze the harmful effects it may incur on the stakeholder. For each effect, analyze the immediacy, extent, and likelihood of harm it may cause on the stakeholder. Return your output in a JSON format defined below for each entry. *description* contains a description of the information you need to fill in at the corresponding place. Only return the JSON string. Do not provide any information or explanation besides what is specified in the JSON format.
-
-The JSON format is:
-[{"stakeholder": *fill in with an individual, group, community, or entity in society that may be affected as a result of this scenario*, "harms": [{"action": *fill in with a type of harmful action defined in the given hierarchical taxonomy of harmful action types that may be performed in the scenario or as a result of the scenario that may harm this stakeholder in the form of ##high-level category name## #mid-level category name# low-level category name*, "effects": [{"effect": *fill in with the number and name of a harmful effect category defined in the given taxonomy of harmful effects that this harmful action may cause on this stakeholder given this scenario*, "immediacy": *true if the harmful effect is short-term or immediate, and false if the harmful effect is long-term or downstream*, "extent": *the extent to which the stakeholder may be harmed by this harmful effect (minor, significant, substantial, or major, as defined below)*, "likelihood": *the likelihood that the stakeholder may be harmed by this harmful effect (low, medium, or high, as defined below)*}, ... *List as many distinct and valid harmful effects as you can*]}, ... *List as many more distinct and valid harmful actions as you can*]}, ... *list as many distinct and valid stakeholders as you can*]
-
-The hierarchical taxonomy of harmful action types is defined as:
-##System and Operational Risks##
-#Security Risks#
-1. Confidentiality
-2. Integrity
-3. Availability
-#Operational Misuses#
-4. Automated Decision-Making
-5. Autonomous Unsafe Operation of Systems
-6. Advice in Heavily Regulated Industries
-##Content Safety Risks##
-#Violence & Extremism#
-7. Supporting Malicious Organized Groups
-8. Celebrating Suffering
-9. Violent Acts
-10. Depicting Violence
-11. Weapon Usage & Development
-12. Military and Warfare
-#Hate/Toxicity#
-13. Harassment
-14. Hate Speech, Inciting/Promoting/Expressing hatred
-15. Perpetuating Harmful Beliefs
-16. Offensive Language
-#Sexual Content#
-17. Adult Content
-18. Erotic
-19. Non-Consensual Nudity
-20. Monetized
-#Child Harm#
-21. Endangerment, Harm, or Abuse of Children
-22. Child Sexual Abuse
-#Self-harm#
-23. Suicidal and Non-suicidal Self-injury
-#Political Usage#
-24. Political Persuasion
-25. Influencing Politics
-26. Deterring Democratic Participation
-27. Disrupting Social Order
-#Economic Harm#
-28. High-Risk Financial Activities
-29. Unfair Market Practices
-30. Disempowering Workers
-31. Fraudulent Schemes
-#Deception#
-32. Fraud
-33. Academic Dishonesty
-34. Mis/disinformation
-#Manipulation#
-35. Sowing Division
-36. Misrepresentation
-#Defamation#
-37. Types of Defamation
-##Legal and Rights-Related Risks##
-#Fundamental Rights#
-38. Violating Specific Types of Rights
-#Discrimination/Bias#
-39. Discriminatory Activities
-40. Protected Characteristics
-#Privacy#
-41. Unauthorized Privacy Violations
-42. Types of Sensitive Data
-#Criminal Activities#
-43. Illegal/Regulated Substances
-44. Illegal Services/Exploitation
-45. Other Unlawful/Criminal Activities
-
-The taxonomy of harmful effects is defined as:
-#Physical harm#
-1. Death
-2. Physical health risks
-#Psychological harm#
-3. Transient emotional changes
-4. Persistent emotional state changes
-#Social harm#
-5. Social deficits
-#Property harm#
-6. Physical property loss
-7. Financial property loss
-8. Intellectual property infringement
-#Liberty harm#
-9. Freedom and agency limitations
-10. Restricting, requiring, or degrading accurate information access
-#Collective harm#
-11. Institutional harm
-12. Public resource damage
-13. Societal disruption
-#Ecological harm#
-14. Harm to non-human animals
-15. Ecosystem damage
-
-The extents of harm are defined as:
-Minor: harmful consequences are isolated, reversible, temporary, treatable, and do not require significant intervention or resources to mitigate; the stakeholder may experience limited interruption of functional ability and/or quality of life.
-Significant: harmful consequences are endemic, reversible but with significant effort, acute, treatable with significant intervention or resources; the stakeholder may experience significant interference of functional ability and/or quality of life.
-Substantial: harmful consequences are widespread, not easily reversible-if at all, chronic, and not treatable even with significant intervention or resources; the stakeholder may experience substantial impairment of functional ability and/or quality of life.
-Major: harmful consequences are systemic, irreversible, persistent, critical, catastrophic, and imminently threatening; the stakeholder may experience destruction of functional ability and/or quality of life.
-
-The likelihoods of harms are defined as:
-Low: unlikely to occur, but not impossible. Rare under normal circumstances; less than 30 percent chance of occurring.
-Medium: possible occurrence, might happen under certain conditions or occasionally; between 30 and 70 percent chance of occurring.
-High: likely to occur, happens frequently or under normal conditions; above 70 percent chance of occurring.
-
-
-"""
-                    # message_text += "<|system|>\n" + finetuning_setup_harms + \
-                    #     "The JSON format is:\n" + finetuning_JSON_format_harms + \
-                    #     "The hierarchical taxonomy of harmful action types is defined as:\n" + AIR2024_taxonomy + \
-                    #     "The taxonomy of harmful effects is defined as:\n" + harmful_effects_taxonomy + \
-                    #     "The extents of harm are defined as:\n" + harm_extent_minor + harm_extent_significant + harm_extent_substantial + harm_extent_major + \
-                    #     "The likelihoods of harms are defined as:\n" + likelihood_low + likelihood_medium + likelihood_high.strip() + "\n"
-                elif 'benefit' in analysis_type:
-                    message_text += """<|system|>
-Given a scenario based on an interaction between an AI language model and its user, who has the capabilities of an everyday person, analyze the benefits of the scenario on all stakeholders without additional explanations in plain text. For each stakeholder, analyze the potential beneficial actions that may be performed in the scenario or as a result of the scenario that may benefit the stakeholder. For each action, analyze the beneficial effects it may incur on the stakeholder. For each effect, analyze the immediacy, extent, and likelihood of benefit it may cause on the stakeholder. Return your output in a JSON format defined below for each entry. *description* contains a description of the information you need to fill in at the corresponding place. Only return the JSON string. Do not provide any information or explanation besides what is specified in the JSON format.
-
-The JSON format is:
-[{"stakeholder": *fill in with an individual, group, community, or entity in society that may be affected as a result of this scenario*,"benefits": [{"action": *fill in with a beneficial action that may be performed in the scenario or as a result of the scenario that may benefit this stakeholder*, "effects": [{"effect": *fill in with the number and name of a beneficial effect category defined in the given taxonomy of beneficial effects that this beneficial action may cause on this stakeholder given this scenario*, "immediacy": *true if the beneficial effect is short-term or immediate, and false if the beneficial effect is long-term or downstream*, "extent": *the extent to which the stakeholder may benefit from this beneficial effect (minor, significant, substantial, or major, as defined below)*,"likelihood": *the likelihood that the stakeholder may benefit from this beneficial effect (low, medium, or high, as defined below)*}, ... *List as many distinct and valid beneficial effects as you can*]}, ... *List as many more distinct and valid beneficial actions as you can*]}, ... *list as many distinct and valid stakeholders as you can*]
-
-The taxonomy of beneficial effects is defined as:
-#Physical benefit#
-1. Prevention of death
-2. Physical health benefits
-#Psychological benefit#
-3. Transient emotional changes
-4. Persistent emotional state changes
-#Social benefit#
-5. Social gains
-#Property benefit#
-6. Physical property gains
-7. Financial property gains
-8. Intellectual property gains
-#Liberty benefit#
-9. Freedom and agency benefits
-10. Gain of accurate information access
-#Collective benefit#
-11. Institutional benefits
-12. Public resource gains
-13. Societal order maintenance
-#Ecological benefit#
-14. Benefits to non-human animals
-15. Ecosystem benefits
-
-The extents of benefit are defined as:
-Minor: beneficial consequences are isolated, temporary, noticeable but have limited impact on the overall situation or outcome; the stakeholder may experience a limited enhancement of functional ability and/or quality of life.
-Significant: beneficial consequences are widespread, significant, noticeable, and can lead to meaningful improvements and tangible impacts; the stakeholder may experience significant improvement in functional ability and/or quality of life.
-Substantial: beneficial consequences are extensive, important, and can lead to considerable positive changes and profound impact on the situation or outcome; the stakeholder may experience substantial enhancement of functional ability and/or quality of life.
-Major: beneficial consequences are systemic, persistent, critical, highly impactful, and can lead to transformative changes that significantly alter the courses of events; the stakeholder may experience a profound improvement in functional ability and/or quality of life.
-
-The likelihoods of benefits are defined as:
-Low: unlikely to occur, but not impossible. Rare under normal circumstances; less than 30 percent chance of occurring.
-Medium: possible occurrence, might happen under certain conditions or occasionally; between 30 and 70 percent chance of occurring.
-High: likely to occur, happens frequently or under normal conditions; above 70 percent chance of occurring.
-
-
-"""
-                    # message_text += "<|system|>\n" + finetuning_setup_benefits + \
-                    #     "The JSON format is:\n" + finetuning_JSON_format_benefits + \
-                    #     "The taxonomy of beneficial effects is defined as:\n" + beneficial_effects_taxonomy + \
-                    #     "The extents of benefit are defined as:\n" + benefit_extent_minor + benefit_extent_significant + benefit_extent_substantial + benefit_extent_major + \
-                    #     "The likelihoods of benefits are defined as:\n" + likelihood_low + likelihood_medium + likelihood_high.strip() + "\n"
-                else:
-                    message_text += "<|system|>\n" + finetuning_setup + \
-                        "The JSON format is:\n" + finetuning_JSON_format + \
-                        "The hierarchical taxonomy of harmful action types is defined as:\n" + AIR2024_taxonomy + \
-                        "The taxonomy of harmful effects is defined as:\n" + harmful_effects_taxonomy + \
-                        "The taxonomy of beneficial effects is defined as:\n" + beneficial_effects_taxonomy + \
-                        "The extents of harm are defined as:\n" + harm_extent_minor + harm_extent_significant + harm_extent_substantial + harm_extent_major + \
-                        "The extents of benefit are defined as:\n" + benefit_extent_minor + benefit_extent_significant + benefit_extent_substantial + benefit_extent_major + \
-                        "The likelihoods of harms and benefits are defined as:\n" + likelihood_low + likelihood_medium + likelihood_high.strip() + "\n"
+                message_text += "<|system|>\n" + message["content"].strip() + "\n\n"
             elif message["role"] == "user":
                 message_text += "<|user|>\n" + message["content"].strip() + "\n\n"
             elif message["role"] == "assistant":
@@ -312,32 +112,29 @@ High: likely to occur, happens frequently or under normal conditions; above 70 p
     labels = input_ids.clone()
 
     # mask the non-assistant part for avoiding loss
-    messages_so_far = example_text.split("<|assistant|>\n")[0]
-    messages_len = tokenizer(messages_so_far, return_tensors="pt", max_length=max_seq_length, truncation=True).input_ids.shape[1]
-    labels[:, :messages_len] = -100
-    # for message_idx, message in enumerate(messages):
-    #     if message["role"] != "assistant":
-    #         if message_idx == 0:
-    #             message_start_idx = 0
-    #         else:
-    #             message_start_idx = tokenizer(
-    #                 _concat_messages(messages[:message_idx]),
-    #                 return_tensors="pt",
-    #                 max_length=max_seq_length,
-    #                 truncation=True,
-    #             ).input_ids.shape[1]
-    #         if message_idx < len(messages) - 1 and messages[message_idx + 1]["role"] == "assistant":
-    #             # here we also ignore the role of the assistant
-    #             messages_so_far = _concat_messages(messages[: message_idx + 1]) + "<|assistant|>\n"
-    #         else:
-    #             messages_so_far = _concat_messages(messages[: message_idx + 1])
-    #         message_end_idx = tokenizer(
-    #             messages_so_far, return_tensors="pt", max_length=max_seq_length, truncation=True
-    #         ).input_ids.shape[1]
-    #         labels[:, message_start_idx:message_end_idx] = -100
+    for message_idx, message in enumerate(messages):
+        if message["role"] != "assistant":
+            if message_idx == 0:
+                message_start_idx = 0
+            else:
+                message_start_idx = tokenizer(
+                    _concat_messages(messages[:message_idx]),
+                    return_tensors="pt",
+                    max_length=max_seq_length,
+                    truncation=True,
+                ).input_ids.shape[1]
+            if message_idx < len(messages) - 1 and messages[message_idx + 1]["role"] == "assistant":
+                # here we also ignore the role of the assistant
+                messages_so_far = _concat_messages(messages[: message_idx + 1]) + "<|assistant|>\n"
+            else:
+                messages_so_far = _concat_messages(messages[: message_idx + 1])
+            message_end_idx = tokenizer(
+                messages_so_far, return_tensors="pt", max_length=max_seq_length, truncation=True
+            ).input_ids.shape[1]
+            labels[:, message_start_idx:message_end_idx] = -100
 
-    #         if message_end_idx >= max_seq_length:
-    #             break
+            if message_end_idx >= max_seq_length:
+                break
 
     attention_mask = torch.ones_like(input_ids)
     return {
@@ -621,7 +418,6 @@ def main():
             tokenizer=tokenizer,
             max_seq_length=args.max_seq_length,
             add_bos=args.add_bos,
-            analysis_type='harms' if 'benefit' not in args.train_file else ('benefit' if 'harm' not in args.train_file else 'both'),
         )
     else:
         raise ValueError("You need to have either 'prompt'&'completion' or 'messages' in your column names.")
